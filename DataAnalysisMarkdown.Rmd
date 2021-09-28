@@ -1,0 +1,1219 @@
+---
+title: "AquacultureInt_Paper"
+author: "Richard Heal"
+date: "28 August 2019"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Clear any rubbish from the global environment
+#rm(list = ls())
+library(data.table)
+#################################################################################################
+#
+#  Function to strip out the binary digit from a number.  Returns 1 or 0
+#
+#################################################################################################
+bin_output <- function(number_in, digit_index){
+  # Strip out the correct number based on the index
+  digit_index <- digit_index - 1
+  c <- strsplit(as.character(number_in), "")
+  digit_index <- length(c[[1]]) - digit_index
+  if (digit_index <1) {b <- 0} else {
+    b <- as.numeric(c[[1]][digit_index])
+  }
+  
+  return(b)
+}
+# Read in the data
+SurveyData <- read.csv(file = "Bangladesh_Farmers_Cleaned_Data_2018_FARMTYPE.csv", header = TRUE)
+
+surveyYear <- 2018
+
+##################################################
+# Should outliers be removed
+#################################################
+RemoveOutliers <- TRUE
+RemoveOutliersFingerlings <- TRUE
+RemoveOutliersHarvest <- TRUE
+RemoveOutliersStock <- TRUE
+#####################################################
+
+# Read in the Mymensingh district file and add flag to data
+MymenFarms <- read.csv(file = "Mymensingh_Farmers.csv", header = TRUE)
+
+MymenFarmers <- SurveyData$Farmer.ID
+MymenFarmers[MymenFarmers %in% MymenFarms$Farmer.ID] <- NA
+MymenFarmers[!is.na(MymenFarmers)] <- 0
+MymenFarmers[is.na(MymenFarmers)] <- 1
+
+SurveyData <- cbind(SurveyData, MymenFarmers)
+
+# Get record index for the unique ponds
+ind_unique_ponds <- which(SurveyData$Harvest.Number == 1)
+SurveyData <- SurveyData[ind_unique_ponds,]
+SurveyData <- setDT(SurveyData)
+
+# Sort out zeros
+SurveyData[Number.of.Pangasius.Stocked == 0, Number.of.Pangasius.Stocked := NA]
+SurveyData[Number.of.Tilapia.Stocked == 0, Number.of.Tilapia.Stocked := NA]
+SurveyData[Number.of.Carp.Fish.Stocked == 0, Number.of.Carp.Fish.Stocked := NA]
+
+# Type of polyculture
+SurveyData[Number.of.Pangasius.Stocked > 0 & Number.of.Tilapia.Stocked > 0 & Number.of.Carp.Fish.Stocked > 0, PolyCult := "TPC"]
+SurveyData[Number.of.Pangasius.Stocked > 0 & Number.of.Tilapia.Stocked > 0 & is.na(Number.of.Carp.Fish.Stocked), PolyCult := "TP"]
+SurveyData[Number.of.Pangasius.Stocked > 0 & is.na(Number.of.Tilapia.Stocked) & Number.of.Carp.Fish.Stocked > 0, PolyCult := "PC"]
+SurveyData[is.na(Number.of.Pangasius.Stocked) & Number.of.Tilapia.Stocked > 0 & Number.of.Carp.Fish.Stocked > 0, PolyCult := "TC"]
+
+# Remove non-carp polyculture
+SurveyData[is.na(Number.of.Pangasius.Stocked) & Number.of.Tilapia.Stocked > 0 & is.na(Number.of.Carp.Fish.Stocked), PolyCult := "None"]
+SurveyData[is.na(Number.of.Tilapia.Stocked) & Number.of.Pangasius.Stocked > 0 & is.na(Number.of.Carp.Fish.Stocked), PolyCult := "None"]
+
+SurveyData <- SurveyData[!PolyCult == "None", ]
+
+# Stock number calculations
+## Pond volume calculations
+#  Need to determine the exact unit of the pond surface area
+#   and convert the depth to metric before volume measurement
+pond_depth <- (SurveyData$Average.water.depth.in.feet *
+                 0.3048)
+#pond_surface_area <- SurveyData$Pond.surface.area * 40.46 # in m2
+pond_surface_area <- SurveyData$Pond.surface.area * 0.004 # in hectares
+pond_volume <- pond_depth * pond_surface_area
+```
+
+
+## Outliers in the data
+
+The data for the fingerling weight, harvest weight and the stock numbers were processed to remove outliers.
+
+
+```{r Outliers, code_folding = 'hide', echo = TRUE}
+############################################################
+  # Clean data by removal of outliers using percentiles
+############################################################
+pLower = 0.005
+pUpper = 0.995
+RemovalProbs = c(pLower, pUpper)
+if (RemoveOutliers){
+  
+  if (RemoveOutliersFingerlings){
+    #Strip out the lower 2.5% and upper 2.5% of the fingerling and harvest weights
+    SurveyData$Tilapia.Fingerlings.Weight..g.[SurveyData$Tilapia.Fingerlings.Weight..g. == 0] <- NA
+    QQ_Tila_Finger <- quantile(SurveyData$Tilapia.Fingerlings.Weight..g., probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Tilapia.Fingerlings.Weight..g. <= QQ_Tila_Finger[1] | SurveyData$Tilapia.Fingerlings.Weight..g. >= QQ_Tila_Finger[2], na.rm = T)," outliers from tilapia fingerling weights"))
+    SurveyData$Tilapia.Fingerlings.Weight..g.[SurveyData$Tilapia.Fingerlings.Weight..g. <= QQ_Tila_Finger[1]] <- NA
+    SurveyData$Tilapia.Fingerlings.Weight..g.[SurveyData$Tilapia.Fingerlings.Weight..g. >= QQ_Tila_Finger[2]] <- NA
+    
+    SurveyData$Pangasius.Fingerlings.Weight..g.[SurveyData$Pangasius.Fingerlings.Weight..g. == 0] <- NA
+    QQ_Pang_Finger <- quantile(SurveyData$Pangasius.Fingerlings.Weight..g., probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Pangasius.Fingerlings.Weight..g. <= QQ_Pang_Finger[1] | SurveyData$Pangasius.Fingerlings.Weight..g. >= QQ_Pang_Finger[2], na.rm = T)," outliers from pangasius fingerling weights"))
+    SurveyData$Pangasius.Fingerlings.Weight..g.[SurveyData$Pangasius.Fingerlings.Weight..g. <= QQ_Pang_Finger[1]] <- NA
+    SurveyData$Pangasius.Fingerlings.Weight..g.[SurveyData$Pangasius.Fingerlings.Weight..g. >= QQ_Pang_Finger[2]] <- NA
+    
+    SurveyData$Carp.Fingerlings.Weight..g.[SurveyData$Carp.Fingerlings.Weight..g. == 0] <- NA
+    QQ_Carp_Finger <- quantile(SurveyData$Carp.Fingerlings.Weight..g., probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Carp.Fingerlings.Weight..g. <= QQ_Carp_Finger[1] | SurveyData$Carp.Fingerlings.Weight..g. >= QQ_Carp_Finger[2], na.rm = T)," outliers from carp fingerling weights"))
+    SurveyData$Carp.Fingerlings.Weight..g.[SurveyData$Carp.Fingerlings.Weight..g. <= QQ_Carp_Finger[1]] <- NA
+    SurveyData$Carp.Fingerlings.Weight..g.[SurveyData$Carp.Fingerlings.Weight..g. >= QQ_Carp_Finger[2]] <- NA
+  }
+  
+  if (RemoveOutliersHarvest){
+    #Strip out the lower 2.5% and upper 2.5% of the harvest weights
+    SurveyData$Tilapia.Weight.at.Harvest..g.[SurveyData$Tilapia.Weight.at.Harvest..g. == 0] <- NA
+    QQ_Tila_Harvest <- quantile(SurveyData$Tilapia.Weight.at.Harvest..g., probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Tilapia.Weight.at.Harvest..g. <= QQ_Tila_Harvest[1] | SurveyData$Tilapia.Weight.at.Harvest..g. >= QQ_Tila_Harvest[2], na.rm = T)," outliers from tilapia harvest weights"))
+    SurveyData$Tilapia.Weight.at.Harvest..g.[SurveyData$Tilapia.Weight.at.Harvest..g. <= QQ_Tila_Harvest[1]] <- NA
+    SurveyData$Tilapia.Weight.at.Harvest..g.[SurveyData$Tilapia.Weight.at.Harvest..g. >= QQ_Tila_Harvest[2]] <- NA
+    
+    SurveyData$Pangasius.Weight.at.Harvest..g.[SurveyData$Pangasius.Weight.at.Harvest..g. == 0] <- NA
+    QQ_Pang_Harvest <- quantile(SurveyData$Pangasius.Weight.at.Harvest..g., probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Pangasius.Weight.at.Harvest..g. <= QQ_Pang_Harvest[1] | SurveyData$Pangasius.Weight.at.Harvest..g. >= QQ_Pang_Harvest[2], na.rm = T)," outliers from pangasius harvest weights"))
+    SurveyData$Pangasius.Weight.at.Harvest..g.[SurveyData$Pangasius.Weight.at.Harvest..g. <= QQ_Pang_Harvest[1]] <- NA
+    SurveyData$Pangasius.Weight.at.Harvest..g.[SurveyData$Pangasius.Weight.at.Harvest..g. >= QQ_Pang_Harvest[2]] <- NA
+    
+    SurveyData$Carp.Weight.at.Harvest..g.[SurveyData$Carp.Weight.at.Harvest..g. == 0] <- NA
+    QQ_Carp_Harvest <- quantile(SurveyData$Carp.Weight.at.Harvest..g., probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Carp.Weight.at.Harvest..g. <= QQ_Carp_Harvest[1] | SurveyData$Carp.Weight.at.Harvest..g. >= QQ_Carp_Harvest[2], na.rm = T)," outliers from carp harvest weights"))
+    SurveyData$Carp.Weight.at.Harvest..g.[SurveyData$Carp.Weight.at.Harvest..g. <= QQ_Carp_Harvest[1]] <- NA
+    SurveyData$Carp.Weight.at.Harvest..g.[SurveyData$Carp.Weight.at.Harvest..g. >= QQ_Carp_Harvest[2]] <- NA
+  }
+  
+  if (RemoveOutliersStock){
+    # Repeat outlier removal for number of stocked fish
+    SurveyData$Number.of.Tilapia.Stocked[SurveyData$Number.of.Tilapia.Stocked == 0] <- NA
+    QQ_Tila_Stock <- quantile(SurveyData$Number.of.Tilapia.Stocked, probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Number.of.Tilapia.Stocked <= QQ_Tila_Stock[1] | SurveyData$Number.of.Tilapia.Stocked >= QQ_Tila_Stock[2], na.rm = T)," outliers from tilapia stock numbers"))
+    Outliers <- which(SurveyData$Number.of.Tilapia.Stocked <= QQ_Tila_Stock[1] | SurveyData$Number.of.Tilapia.Stocked >= QQ_Tila_Stock[2])
+    SurveyData <- SurveyData[!Outliers, ]
+    
+    SurveyData$Number.of.Pangasius.Stocked[SurveyData$Number.of.Pangasius.Stocked == 0] <- NA
+    QQ_Pang_Stock <- quantile(SurveyData$Number.of.Pangasius.Stocked, probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Number.of.Pangasius.Stocked <= QQ_Pang_Stock[1] | SurveyData$Number.of.Pangasius.Stocked >= QQ_Pang_Stock[2], na.rm = T)," outliers from pangasius stock numbers"))
+    Outliers <- which(SurveyData$Number.of.Pangasius.Stocked <= QQ_Pang_Stock[1] | SurveyData$Number.of.Pangasius.Stocked >= QQ_Pang_Stock[2])
+    SurveyData <- SurveyData[!Outliers, ]
+    
+    SurveyData$Number.of.Carp.Fish.Stocked[SurveyData$Number.of.Carp.Fish.Stocked == 0] <- NA
+    QQ_Carp_Stock <- quantile(SurveyData$Number.of.Carp.Fish.Stocked, probs = RemovalProbs, na.rm = TRUE)
+    print(paste0("Removing ",
+                 sum(SurveyData$Number.of.Carp.Fish.Stocked <= QQ_Carp_Stock[1] | SurveyData$Number.of.Carp.Fish.Stocked >= QQ_Carp_Stock[2], na.rm = T)," outliers from carp stock numbers"))
+    Outliers <- which(SurveyData$Number.of.Carp.Fish.Stocked <= QQ_Carp_Stock[1] | SurveyData$Number.of.Carp.Fish.Stocked >= QQ_Carp_Stock[2])
+    SurveyData <- SurveyData[!Outliers, ]
+  }
+  
+}
+
+# Calculate overall stock in ponds
+SurveyData[, Overall_Stock := rowSums(.SD, na.rm = TRUE), .SDcols = c("Number.of.Pangasius.Stocked", "Number.of.Tilapia.Stocked", "Number.of.Carp.Fish.Stocked", "Number.of.Other.Fish.Stocked")]
+SurveyData[, Overall_Density := (Overall_Stock/(Pond.surface.area * 40.46))]
+SurveyData[, Tila_Density := (Number.of.Tilapia.Stocked/(Pond.surface.area * 40.46))]
+SurveyData[, Pang_Density := (Number.of.Pangasius.Stocked/(Pond.surface.area * 40.46))]
+SurveyData[, Carp_Density := (Number.of.Carp.Fish.Stocked/(Pond.surface.area * 40.46))]
+SurveyData[, Othe_Density := (Number.of.Other.Fish.Stocked/(Pond.surface.area * 40.46))]
+
+
+# The producitivty is based on the harvest weight - fingerling weight / fingerling weight * 100
+prod_Tila <- ((SurveyData$Tilapia.Weight.at.Harvest..g. - SurveyData$Tilapia.Fingerlings.Weight..g.)/SurveyData$Tilapia.Fingerlings.Weight..g.) * 100
+#prod_Tila[SurveyData$Tilapia.Fingerlings.Weight..g.< 1] <- NA
+```
+
+## Analysis of Data for Aquaculture International short paper
+
+This markdown documents the data analysis for the Aquaculture International Paper using farmers questionnaire data to produce a model of the economics of finfish production in Mymensingh. 
+
+```{r Summary Statistics, code_folding = 'hide'}
+#########################################################
+#
+# Get the age of the ponds for those farms in Mymensingh
+#
+#########################################################
+library(kableExtra)
+# Get the age for all the farm ponds
+Age_AllPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond
+MeanAge_AllPonds <- mean(Age_AllPonds, na.rm = TRUE)
+Percent_Under5_All <- sum(Age_AllPonds < 5)/length(Age_AllPonds) * 100
+Percent_Under10_All <- sum(Age_AllPonds < 10)/length(Age_AllPonds) * 100
+
+# Age of ponds in Mymensingh by species
+Tila_Age_AllPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond[!is.na(SurveyData$Number.of.Tilapia.Stocked)]
+Pang_Age_AllPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond[!is.na(SurveyData$Number.of.Pangasius.Stocked)]
+Carp_Age_AllPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond[!is.na(SurveyData$Number.of.Carp.Fish.Stocked)]
+
+# Repeat but just for the Mymensingh district
+Age_MymenPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond[SurveyData$MymenFarmers == 1]
+MeanAge_MymenPonds <- mean(Age_MymenPonds, na.rm = TRUE)
+Percent_Under5_MymenPonds <- sum(Age_MymenPonds < 5)/length(Age_MymenPonds) * 100
+Percent_Under10_MymenPonds <- sum(Age_MymenPonds < 10)/length(Age_MymenPonds) * 100
+
+# Age of ponds in Mymensingh by species
+Tila_Age_MymenPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond[SurveyData$MymenFarmers == 1 & !is.na(SurveyData$Number.of.Tilapia.Stocked)]
+Pang_Age_MymenPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond[SurveyData$MymenFarmers == 1 & !is.na(SurveyData$Number.of.Pangasius.Stocked)]
+Carp_Age_MymenPonds <- surveyYear - SurveyData$Year.Culture.started.in.Pond[SurveyData$MymenFarmers == 1 & !is.na(SurveyData$Number.of.Carp.Fish.Stocked)]
+
+BasicStats <- data.frame(rbind(
+  c("Mean age of all ponds", mean(Age_AllPonds, na.rm = TRUE)),
+  c("Age of all ponds STD", sd(Age_AllPonds, na.rm = TRUE)),
+  c("Mean age of all tilapia ponds", mean(Tila_Age_AllPonds, na.rm = TRUE)),
+  c("Age of all tilapia ponds STD", sd(Tila_Age_AllPonds, na.rm = TRUE)),
+  c("Mean age of all pang ponds", mean(Pang_Age_AllPonds, na.rm = TRUE)),
+  c("Age of all pang ponds STD", sd(Pang_Age_AllPonds, na.rm = TRUE)),
+  c("Mean age of all carp ponds", mean(Carp_Age_AllPonds, na.rm = TRUE)),
+  c("Age of all carp ponds STD", sd(Carp_Age_AllPonds, na.rm = TRUE)),
+  
+  c("Mean age of Mymensingh district ponds", mean(Age_MymenPonds, na.rm = TRUE)),
+  c("Age of Mymensingh district ponds STD", sd(Age_MymenPonds, na.rm = TRUE)),
+  c("Mean age of all tilapia Mymensingh ponds", mean(Tila_Age_MymenPonds, na.rm = TRUE)),
+  c("Age of all tilapia Mymensingh ponds STD", sd(Tila_Age_MymenPonds, na.rm = TRUE)),
+  c("Mean age of all pang Mymensingh ponds", mean(Pang_Age_MymenPonds, na.rm = TRUE)),
+  c("Age of all pang Mymensingh ponds STD", sd(Pang_Age_MymenPonds, na.rm = TRUE)),
+  c("Mean age of all carp Mymensingh ponds", mean(Carp_Age_MymenPonds, na.rm = TRUE)),
+  c("Age of all carp Mymensingh ponds STD", sd(Carp_Age_MymenPonds, na.rm = TRUE))))
+colnames(BasicStats) <- c("Parameter", "Value")  
+BasicStatsTable <- kbl(BasicStats, caption = "Pond ages") %>%
+  kable_paper(full_width = TRUE)
+
+#############################################################
+#
+# Fish species stocked
+#############################################################
+Tila_ponds_All <- sum(!is.na(SurveyData$Number.of.Tilapia.Stocked))
+Carp_ponds_All <- sum(!is.na(SurveyData$Number.of.Carp.Fish.Stocked))
+Pang_ponds_All <- sum(!is.na(SurveyData$Number.of.Pangasius.Stocked))
+Othe_ponds_All <- sum(!is.na(SurveyData$Number.of.Other.Fish.Stocked))
+
+Tila_ponds_Mymen <- sum(SurveyData$MymenFarmers == 1 & !is.na(SurveyData$Number.of.Tilapia.Stocked))
+Carp_ponds_Mymen <- sum(SurveyData$MymenFarmers == 1 & !is.na(SurveyData$Number.of.Carp.Fish.Stocked))
+Pang_ponds_Mymen <- sum(SurveyData$MymenFarmers == 1 & !is.na(SurveyData$Number.of.Pangasius.Stocked))
+Othe_ponds_Mymen <- sum(SurveyData$MymenFarmers == 1 & !is.na(SurveyData$Number.of.Other.Fish.Stocked))
+
+##############################################################
+# Get stocking densities
+##############################################################
+StockDensity_DF <- data.frame(rbind(
+  c("Overall Mean Stocking Density per ha", SurveyData[, mean(Overall_Density, na.rm = TRUE)]),
+  c("Overall STD Stocking Density per ha", SurveyData[, sd(Overall_Density, na.rm = TRUE)]),
+  c("Overall Range Stocking Density per ha", paste(SurveyData[, min(Overall_Density, na.rm = TRUE)],":", SurveyData[, max(Overall_Density, na.rm = TRUE)])),
+  c("Tilapia Mean Stocking Density per ha", SurveyData[, mean(Tila_Density, na.rm = TRUE)]),
+  c("Tilapia STD Stocking Density per ha", SurveyData[, sd(Tila_Density, na.rm = TRUE)]),
+  c("Tilapia Range Stocking Density per ha", paste(SurveyData[, min(Tila_Density, na.rm = TRUE)],":", SurveyData[, max(Tila_Density, na.rm = TRUE)])),
+  c("Pangasius Mean Stocking Density per ha", SurveyData[, mean(Pang_Density, na.rm = TRUE)]),
+  c("Pangasius STD Stocking Density per ha", SurveyData[, sd(Pang_Density, na.rm = TRUE)]),
+  c("Pangasius Range Stocking Density per ha", paste(SurveyData[, min(Pang_Density, na.rm = TRUE)],":", SurveyData[, max(Pang_Density, na.rm = TRUE)])),
+  c("Carp Mean Stocking Density per ha", SurveyData[, mean(Carp_Density, na.rm = TRUE)]),
+  c("Carp STD Stocking Density per ha", SurveyData[, sd(Carp_Density, na.rm = TRUE)]),
+  c("Carp Range Stocking Density per ha", paste(SurveyData[, min(Carp_Density, na.rm = TRUE)],":", SurveyData[, max(Carp_Density, na.rm = TRUE)]))))
+colnames(StockDensity_DF) <- c("Stock Parameter", "Value")  
+StockDensity_DF_Table <- kbl(StockDensity_DF, caption = "Stocking Densities") %>%
+  kable_paper(full_width = TRUE)  
+
+##############################################################
+# Stratify the stocking densities according to culture method
+##############################################################
+StockDensityBySpecies_TPC <- data.frame(rbind(
+  c("TPC: Overall Mean Stocking Density", SurveyData[PolyCult == "TPC", mean(Overall_Density, na.rm = TRUE)]),
+  c("TPC: Overall STD Stocking Density", SurveyData[PolyCult == "TPC", sd(Overall_Density, na.rm = TRUE)]),
+  c("TPC: Overall Range Stocking Density", paste(SurveyData[PolyCult == "TPC", min(Overall_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", max(Overall_Density, na.rm = TRUE)])),
+  c("TPC: Tilapia Mean Stocking Density", SurveyData[PolyCult == "TPC", mean(Tila_Density, na.rm = TRUE)]),
+  c("TPC: Tilapia STD Stocking Density", SurveyData[PolyCult == "TPC", sd(Tila_Density, na.rm = TRUE)]),
+  c("TPC: Tilapia Range Stocking Density", paste(SurveyData[PolyCult == "TPC", min(Tila_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", max(Tila_Density, na.rm = TRUE)])),
+  c("TPC: Pangasius Mean Stocking Density", SurveyData[PolyCult == "TPC", mean(Pang_Density, na.rm = TRUE)]),
+  c("TPC: Pangasius STD Stocking Density", SurveyData[PolyCult == "TPC", sd(Pang_Density, na.rm = TRUE)]),
+  c("TPC: Pangasius Range Stocking Density", paste(SurveyData[PolyCult == "TPC", min(Pang_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", max(Pang_Density, na.rm = TRUE)])),
+  c("TPC: Carp Mean Stocking Density", SurveyData[PolyCult == "TPC", mean(Carp_Density, na.rm = TRUE)]),
+  c("TPC: Carp STD Stocking Density", SurveyData[PolyCult == "TPC", sd(Carp_Density, na.rm = TRUE)]),
+  c("TPC: Carp Range Stocking Density", paste(SurveyData[PolyCult == "TPC", min(Carp_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", max(Carp_Density, na.rm = TRUE)]))))
+colnames(StockDensityBySpecies_TPC) <- c("Stock Parameter", "Value")  
+StockDensityBySpecies_TPC_Table <- kbl(StockDensityBySpecies_TPC, caption = "Stocking Densities for TPC Ponds") %>%
+  kable_paper(full_width = TRUE)
+
+
+StockDensityBySpecies_TC <- data.frame(rbind(
+  c("TC: Overall Mean Stocking Density", SurveyData[PolyCult == "TC", mean(Overall_Density, na.rm = TRUE)]),
+  c("TC: Overall STD Stocking Density", SurveyData[PolyCult == "TC", sd(Overall_Density, na.rm = TRUE)]),
+  c("TC: Overall Range Stocking Density", paste(SurveyData[PolyCult == "TC", min(Overall_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", max(Overall_Density, na.rm = TRUE)])),
+  c("TC: Tilapia Mean Stocking Density", SurveyData[PolyCult == "TC", mean(Tila_Density, na.rm = TRUE)]),
+  c("TC: Tilapia STD Stocking Density", SurveyData[PolyCult == "TC", sd(Tila_Density, na.rm = TRUE)]),
+  c("TC: Tilapia Range Stocking Density", paste(SurveyData[PolyCult == "TC", min(Tila_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", max(Tila_Density, na.rm = TRUE)])),
+  c("TC: Pangasius Mean Stocking Density", SurveyData[PolyCult == "TC", mean(Pang_Density, na.rm = TRUE)]),
+  c("TC: Pangasius STD Stocking Density", SurveyData[PolyCult == "TC", sd(Pang_Density, na.rm = TRUE)]),
+  c("TC: Pangasius Range Stocking Density", paste(SurveyData[PolyCult == "TC", min(Pang_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", max(Pang_Density, na.rm = TRUE)])),
+  c("TC: Carp Mean Stocking Density", SurveyData[PolyCult == "TC", mean(Carp_Density, na.rm = TRUE)]),
+  c("TC: Carp STD Stocking Density", SurveyData[PolyCult == "TC", sd(Carp_Density, na.rm = TRUE)]),
+  c("TC: Carp Range Stocking Density", paste(SurveyData[PolyCult == "TC", min(Carp_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", max(Carp_Density, na.rm = TRUE)]))))
+colnames(StockDensityBySpecies_TC) <- c("Stock Parameter", "Value")  
+StockDensityBySpecies_TC_Table <- kbl(StockDensityBySpecies_TC, caption = "Stocking Densities for TC Ponds") %>%
+  kable_paper(full_width = TRUE)
+
+
+StockDensityBySpecies_PC <- data.frame(rbind(
+  c("PC: Overall Mean Stocking Density", SurveyData[PolyCult == "PC", mean(Overall_Density, na.rm = TRUE)]),
+  c("PC: Overall STD Stocking Density", SurveyData[PolyCult == "PC", sd(Overall_Density, na.rm = TRUE)]),
+  c("PC: Overall Range Stocking Density", paste(SurveyData[PolyCult == "PC", min(Overall_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", max(Overall_Density, na.rm = TRUE)])),
+  c("PC: Tilapia Mean Stocking Density", SurveyData[PolyCult == "PC", mean(Tila_Density, na.rm = TRUE)]),
+  c("PC: Tilapia STD Stocking Density", SurveyData[PolyCult == "PC", sd(Tila_Density, na.rm = TRUE)]),
+  c("PC: Tilapia Range Stocking Density", paste(SurveyData[PolyCult == "PC", min(Tila_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", max(Tila_Density, na.rm = TRUE)])),
+  c("PC: Pangasius Mean Stocking Density", SurveyData[PolyCult == "PC", mean(Pang_Density, na.rm = TRUE)]),
+  c("PC: Pangasius STD Stocking Density", SurveyData[PolyCult == "PC", sd(Pang_Density, na.rm = TRUE)]),
+  c("PC: Pangasius Range Stocking Density", paste(SurveyData[PolyCult == "PC", min(Pang_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", max(Pang_Density, na.rm = TRUE)])),
+  c("PC: Carp Mean Stocking Density", SurveyData[PolyCult == "PC", mean(Carp_Density, na.rm = TRUE)]),
+  c("PC: Carp STD Stocking Density", SurveyData[PolyCult == "PC", sd(Carp_Density, na.rm = TRUE)]),
+  c("PC: Carp Range Stocking Density", paste(SurveyData[PolyCult == "PC", min(Carp_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", max(Carp_Density, na.rm = TRUE)]))))
+colnames(StockDensityBySpecies_PC) <- c("Stock Parameter", "Value")  
+StockDensityBySpecies_PC_Table <- kbl(StockDensityBySpecies_PC, caption = "Stocking Densities for PC Ponds") %>%
+  kable_paper(full_width = TRUE)
+
+
+
+StockDensityBySpecies_TP <- data.frame(rbind(
+  c("TP: Overall Mean Stocking Density", SurveyData[PolyCult == "TP", mean(Overall_Density, na.rm = TRUE)]),
+  c("TP: Overall STD Stocking Density", SurveyData[PolyCult == "TP", sd(Overall_Density, na.rm = TRUE)]),
+  c("TP: Overall Range Stocking Density", paste(SurveyData[PolyCult == "TP", min(Overall_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", max(Overall_Density, na.rm = TRUE)])),
+  c("TP: Tilapia Mean Stocking Density", SurveyData[PolyCult == "TP", mean(Tila_Density, na.rm = TRUE)]),
+  c("TP: Tilapia STD Stocking Density", SurveyData[PolyCult == "TP", sd(Tila_Density, na.rm = TRUE)]),
+  c("TP: Tilapia Range Stocking Density", paste(SurveyData[PolyCult == "TP", min(Tila_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", max(Tila_Density, na.rm = TRUE)])),
+  c("TP: Pangasius Mean Stocking Density", SurveyData[PolyCult == "TP", mean(Pang_Density, na.rm = TRUE)]),
+  c("TP: Pangasius STD Stocking Density", SurveyData[PolyCult == "TP", sd(Pang_Density, na.rm = TRUE)]),
+  c("TP: Pangasius Range Stocking Density", paste(SurveyData[PolyCult == "TP", min(Pang_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", max(Pang_Density, na.rm = TRUE)])),
+  c("TP: Carp Mean Stocking Density", SurveyData[PolyCult == "TP", mean(Carp_Density, na.rm = TRUE)]),
+  c("TP: Carp STD Stocking Density", SurveyData[PolyCult == "TP", sd(Carp_Density, na.rm = TRUE)]),
+  c("TP: Carp Range Stocking Density", paste(SurveyData[PolyCult == "TP", min(Carp_Density, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", max(Carp_Density, na.rm = TRUE)]))))
+colnames(StockDensityBySpecies_TP) <- c("Stock Parameter", "Value")  
+StockDensityBySpecies_TP_Table <- kbl(StockDensityBySpecies_TP, caption = "Stocking Densities for TP Ponds") %>%
+  kable_paper(full_width = TRUE)
+
+##############################################################
+# Get the yield data
+# This is corrected for mortality data & double harvest for tilapia
+##############################################################
+SurveyData[Pangasius.Stock.Mortality.during.Production == 0, PangMort := 1.00]
+SurveyData[Pangasius.Stock.Mortality.during.Production == 1, PangMort := 0.95]
+SurveyData[Pangasius.Stock.Mortality.during.Production == 2, PangMort := 0.85]
+SurveyData[Pangasius.Stock.Mortality.during.Production == 3, PangMort := 0.4]
+
+SurveyData[Tilapia.Stock.Mortality.during.Production == 0, TilaMort := 1]
+SurveyData[Tilapia.Stock.Mortality.during.Production == 1, TilaMort := 0.95]
+SurveyData[Tilapia.Stock.Mortality.during.Production == 2, TilaMort := 0.85]
+SurveyData[Tilapia.Stock.Mortality.during.Production == 3, TilaMort := 0.4]
+
+SurveyData[Carp.Stock.Mortality.during.Production == 0, CarpMort := 1]
+SurveyData[Carp.Stock.Mortality.during.Production == 1, CarpMort := 0.95]
+SurveyData[Carp.Stock.Mortality.during.Production == 2, CarpMort := 0.85]
+SurveyData[Carp.Stock.Mortality.during.Production == 3, CarpMort := 0.4]
+
+SurveyData[Other.Fish.Stock.Mortality.during.Production == 0, OtherMort := 1]
+SurveyData[Other.Fish.Stock.Mortality.during.Production == 1, OtherMort := 0.95]
+SurveyData[Other.Fish.Stock.Mortality.during.Production == 2, OtherMort := 0.85]
+SurveyData[Other.Fish.Stock.Mortality.during.Production == 3, OtherMort := 0.4]
+
+SurveyData[, prod_Tila := ((((SurveyData$Tilapia.Weight.at.Harvest..g. - SurveyData$Tilapia.Fingerlings.Weight..g.) * SurveyData$Number.of.Tilapia.Stocked) / (SurveyData$Pond.surface.area * 40.46)) * 0.01 * 2 * TilaMort )]
+SurveyData[, prod_Pang := ((((SurveyData$Pangasius.Weight.at.Harvest..g. - SurveyData$Pangasius.Fingerlings.Weight..g.) * SurveyData$Number.of.Pangasius.Stocked) / (SurveyData$Pond.surface.area * 40.46))* 0.01 * PangMort)]
+SurveyData[, prod_Carp := ((((SurveyData$Carp.Weight.at.Harvest..g. - SurveyData$Carp.Fingerlings.Weight..g.) * SurveyData$Number.of.Carp.Fish.Stocked) / (SurveyData$Pond.surface.area * 40.46))* 0.01 * CarpMort)]
+SurveyData[, prod_Othe := ((((SurveyData$Other.Weight.at.Harvest..g. - SurveyData$Other.Fingerlings.Weight..g.) * SurveyData$Number.of.Other.Fish.Stocked) / (SurveyData$Pond.surface.area * 40.46))* 0.01 * OtherMort)]
+
+SurveyData[, prod_Total_Overall := rowSums(.SD, na.rm = TRUE), .SDcols = c("prod_Tila", "prod_Pang", "prod_Carp", "prod_Othe")]
+SurveyData[prod_Total_Overall == 0,  prod_Total_Overall := NA]
+
+SurveyData[, prod_Total_TPC := rowSums(.SD, na.rm = TRUE), .SDcols = c("prod_Tila", "prod_Pang", "prod_Carp")]
+SurveyData[prod_Total_TPC == 0,  prod_Total_TPC := NA]
+
+Yields_DF <- data.frame(rbind(
+  c("Overall Mean Yield", SurveyData[, mean(prod_Total_Overall, na.rm = TRUE)]),
+  c("Overall Std Yield", SurveyData[, sd(prod_Total_Overall, na.rm = TRUE)]),
+  c("Overall Tilapia Mean Yield", SurveyData[, mean(prod_Tila, na.rm = TRUE)]),
+  c("Overall Tilapia Std Yield", SurveyData[, sd(prod_Tila, na.rm = TRUE)]),
+  c("Overall Pang Mean Yield", SurveyData[, mean(prod_Pang, na.rm = TRUE)]),
+  c("Overall Pang Std Yield", SurveyData[, sd(prod_Pang, na.rm = TRUE)]),
+  c("Overall Carp Mean Yield", SurveyData[, mean(prod_Carp, na.rm = TRUE)]),
+  c("Overall Carp Std Yield", SurveyData[, sd(prod_Carp, na.rm = TRUE)])
+  ))
+colnames(Yields_DF) <- c("Stock Parameter", "Value")  
+Yields_DF_Table <- kbl(Yields_DF, caption = "Overall Corrected Yield (tonnes/ha)") %>%
+  kable_paper(full_width = TRUE)
+  
+#######################################################
+# TPC ponds yields
+#######################################################
+
+Yields_DF_TPC <- data.frame(rbind(
+  c("TPC: Overall Mean Yield", SurveyData[PolyCult == "TPC", mean(prod_Total_TPC, na.rm = TRUE)]),
+  c("TPC: Overall STD Yield", SurveyData[PolyCult == "TPC", sd(prod_Total_TPC, na.rm = TRUE)]),
+  c("TPC: Overall Range Yield", paste(SurveyData[PolyCult == "TPC", min(prod_Total_TPC, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", max(prod_Total_TPC, na.rm = TRUE)])),
+  c("TPC: Tilapia Mean Yield", SurveyData[PolyCult == "TPC", mean(prod_Tila, na.rm = TRUE)]),
+  c("TPC: Tilapia STD Yield", SurveyData[PolyCult == "TPC", sd(prod_Tila, na.rm = TRUE)]),
+  c("TPC: Tilapia Range Yield", paste(SurveyData[PolyCult == "TPC", min(prod_Tila, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", min(prod_Tila, na.rm = TRUE)])),
+  c("TPC: Pangasius Mean Yield", SurveyData[PolyCult == "TPC", mean(prod_Pang, na.rm = TRUE)]),
+  c("TPC: Pangasius STD Yield", SurveyData[PolyCult == "TPC", sd(prod_Pang, na.rm = TRUE)]),
+  c("TPC: Pangasius Range Yield", paste(SurveyData[PolyCult == "TPC", min(prod_Pang, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", max(prod_Pang, na.rm = TRUE)])),
+  c("TPC: Carp Mean Yield", SurveyData[PolyCult == "TPC", mean(prod_Carp, na.rm = TRUE)]),
+  c("TPC: Carp STD Yield", SurveyData[PolyCult == "TPC", sd(prod_Carp, na.rm = TRUE)]),
+  c("TPC: Carp Range Yield", paste(SurveyData[PolyCult == "TPC", min(prod_Carp, na.rm = TRUE)],":", SurveyData[PolyCult == "TPC", max(prod_Carp, na.rm = TRUE)]))))
+colnames(Yields_DF_TPC) <- c("Stock Parameter", "Value")  
+Yields_DF_TPC_Table <- kbl(Yields_DF_TPC, caption = "Overall Corrected Yield for TPC Ponds (tonnes/ha)") %>%
+  kable_paper(full_width = TRUE) 
+
+Yields_DF_TC <- data.frame(rbind(
+  c("TC: Overall Mean Yield", SurveyData[PolyCult == "TC", mean(prod_Total_TPC, na.rm = TRUE)]),
+  c("TC: Overall STD Yield", SurveyData[PolyCult == "TC", sd(prod_Total_TPC, na.rm = TRUE)]),
+  c("TC: Overall Range Yield", paste(SurveyData[PolyCult == "TC", min(prod_Total_TPC, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", max(prod_Total_TPC, na.rm = TRUE)])),
+  c("TC: Tilapia Mean Yield", SurveyData[PolyCult == "TC", mean(prod_Tila, na.rm = TRUE)]),
+  c("TC: Tilapia STD Yield", SurveyData[PolyCult == "TC", sd(prod_Tila, na.rm = TRUE)]),
+  c("TC: Tilapia Range Yield", paste(SurveyData[PolyCult == "TC", min(prod_Tila, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", min(prod_Tila, na.rm = TRUE)])),
+  c("TC: Pangasius Mean Yield", SurveyData[PolyCult == "TC", mean(prod_Pang, na.rm = TRUE)]),
+  c("TC: Pangasius STD Yield", SurveyData[PolyCult == "TC", sd(prod_Pang, na.rm = TRUE)]),
+  c("TC: Pangasius Range Yield", paste(SurveyData[PolyCult == "TC", min(prod_Pang, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", max(prod_Pang, na.rm = TRUE)])),
+  c("TC: Carp Mean Yield", SurveyData[PolyCult == "TC", mean(prod_Carp, na.rm = TRUE)]),
+  c("TC: Carp STD Yield", SurveyData[PolyCult == "TC", sd(prod_Carp, na.rm = TRUE)]),
+  c("TC: Carp Range Yield", paste(SurveyData[PolyCult == "TC", min(prod_Carp, na.rm = TRUE)],":", SurveyData[PolyCult == "TC", max(prod_Carp, na.rm = TRUE)]))))
+colnames(Yields_DF_TC) <- c("Stock Parameter", "Value")  
+Yields_DF_TC_Table <- kbl(Yields_DF_TC, caption = "Overall Corrected Yield for TC Ponds (tonnes/ha)") %>%
+  kable_paper(full_width = TRUE)
+
+Yields_DF_PC <- data.frame(rbind(
+  c("PC: Overall Mean Yield", SurveyData[PolyCult == "PC", mean(prod_Total_TPC, na.rm = TRUE)]),
+  c("PC: Overall STD Yield", SurveyData[PolyCult == "PC", sd(prod_Total_TPC, na.rm = TRUE)]),
+  c("PC: Overall Range Yield", paste(SurveyData[PolyCult == "PC", min(prod_Total_TPC, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", max(prod_Total_TPC, na.rm = TRUE)])),
+  c("PC: Tilapia Mean Yield", SurveyData[PolyCult == "PC", mean(prod_Tila, na.rm = TRUE)]),
+  c("PC: Tilapia STD Yield", SurveyData[PolyCult == "PC", sd(prod_Tila, na.rm = TRUE)]),
+  c("PC: Tilapia Range Yield", paste(SurveyData[PolyCult == "PC", min(prod_Tila, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", min(prod_Tila, na.rm = TRUE)])),
+  c("PC: Pangasius Mean Yield", SurveyData[PolyCult == "PC", mean(prod_Pang, na.rm = TRUE)]),
+  c("PC: Pangasius STD Yield", SurveyData[PolyCult == "PC", sd(prod_Pang, na.rm = TRUE)]),
+  c("PC: Pangasius Range Yield", paste(SurveyData[PolyCult == "PC", min(prod_Pang, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", max(prod_Pang, na.rm = TRUE)])),
+  c("PC: Carp Mean Yield", SurveyData[PolyCult == "PC", mean(prod_Carp, na.rm = TRUE)]),
+  c("PC: Carp STD Yield", SurveyData[PolyCult == "PC", sd(prod_Carp, na.rm = TRUE)]),
+  c("PC: Carp Range Yield", paste(SurveyData[PolyCult == "PC", min(prod_Carp, na.rm = TRUE)],":", SurveyData[PolyCult == "PC", max(prod_Carp, na.rm = TRUE)]))))
+colnames(Yields_DF_PC) <- c("Stock Parameter", "Value")  
+Yields_DF_PC_Table <- kbl(Yields_DF_PC, caption = "Overall Corrected Yield for PC Ponds (tonnes/ha)") %>%
+  kable_paper(full_width = TRUE)
+
+Yields_DF_TP <- data.frame(rbind(
+  c("TP: Overall Mean Yield", SurveyData[PolyCult == "TP", mean(prod_Total_TPC, na.rm = TRUE)]),
+  c("TP: Overall STD Yield", SurveyData[PolyCult == "TP", sd(prod_Total_TPC, na.rm = TRUE)]),
+  c("TP: Overall Range Yield", paste(SurveyData[PolyCult == "TP", min(prod_Total_TPC, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", max(prod_Total_TPC, na.rm = TRUE)])),
+  c("TP: Tilapia Mean Yield", SurveyData[PolyCult == "TP", mean(prod_Tila, na.rm = TRUE)]),
+  c("TP: Tilapia STD Yield", SurveyData[PolyCult == "TP", sd(prod_Tila, na.rm = TRUE)]),
+  c("TP: Tilapia Range Yield", paste(SurveyData[PolyCult == "TP", min(prod_Tila, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", min(prod_Tila, na.rm = TRUE)])),
+  c("TP: Pangasius Mean Yield", SurveyData[PolyCult == "TP", mean(prod_Pang, na.rm = TRUE)]),
+  c("TP: Pangasius STD Yield", SurveyData[PolyCult == "TP", sd(prod_Pang, na.rm = TRUE)]),
+  c("TP: Pangasius Range Yield", paste(SurveyData[PolyCult == "TP", min(prod_Pang, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", max(prod_Pang, na.rm = TRUE)])),
+  c("TP: Carp Mean Yield", SurveyData[PolyCult == "TP", mean(prod_Carp, na.rm = TRUE)]),
+  c("TP: Carp STD Yield", SurveyData[PolyCult == "TP", sd(prod_Carp, na.rm = TRUE)]),
+  c("TP: Carp Range Yield", paste(SurveyData[PolyCult == "TP", min(prod_Carp, na.rm = TRUE)],":", SurveyData[PolyCult == "TP", max(prod_Carp, na.rm = TRUE)]))))
+colnames(Yields_DF_TP) <- c("Stock Parameter", "Value")  
+Yields_DF_TP_Table <- kbl(Yields_DF_TP, caption = "Overall Corrected Yield for TP Ponds (tonnes/ha)") %>%
+  kable_paper(full_width = TRUE)
+
+
+##############################################################
+# Farms and food used
+##############################################################
+# Get the data
+feed_stock <- SurveyData$Feeding.Practices.in.the.Pond
+f1 <- rep(NA, length(feed_stock))
+own <- rep(0, length(feed_stock))
+float <- rep(0, length(feed_stock))
+sink <- rep(0, length(feed_stock))
+
+# Extract 10 - Company Pellet and 100 - Company Floating
+c1 <- mapply(bin_output, feed_stock, 2)
+c2 <- mapply(bin_output, feed_stock, 3)
+f1[which(c1 == 0 | c2 ==0)] <- 0
+f1[which(c1 == 1)] <- 1
+f1[which(c2 == 2)] <- 2
+
+# Extract 10 - Own food - 1
+f2 <- rep(NA, length(feed_stock))
+c3 <- mapply(bin_output, feed_stock, 1)
+f2[which(c3 ==0)] <- 0
+f2[which(c3 ==1)] <- 1
+
+# For economics sort out 3 vectors for own, sink and float
+own[(which(c3 == 1))] <- 1
+float[(which(c2 == 1))] <- 1
+sink[(which(c1 == 1))] <- 1
+
+# Correct for multiple uses
+MULTI <- rowSums(cbind(own,float,sink))
+own <- own/MULTI
+float <- float/MULTI
+sink <- sink/MULTI
+
+# Input whether own, company floating or sinking used
+SurveyData[, OwnFeed := apply(.SD, 1, bin_output, digit_index = 1), .SDcols = c("Feeding.Practices.in.the.Pond")]
+SurveyData[, SinkFeed := apply(.SD, 1, bin_output, digit_index = 2), .SDcols = c("Feeding.Practices.in.the.Pond")]
+SurveyData[, FloatFeed := apply(.SD, 1, bin_output, digit_index = 3), .SDcols = c("Feeding.Practices.in.the.Pond")]
+
+# To compensate for multiple feed use assume equal use
+SurveyData[, MultiFeeds := rowSums(.SD, na.rm = TRUE), .SDcols = c("OwnFeed", "SinkFeed", "FloatFeed")]
+SurveyData[, OwnFeed := (OwnFeed/MultiFeeds)]
+SurveyData[, SinkFeed := (SinkFeed/MultiFeeds)]
+SurveyData[, FloatFeed := (FloatFeed/MultiFeeds)]
+
+```
+
+## Basic stats on the ponds in the survey
+
+### Pond Details
+`r BasicStatsTable`
+
+### Stocking Densities
+`r StockDensity_DF_Table`
+
+### Stocking Densities for TPC Ponds
+
+`r StockDensityBySpecies_TPC_Table`
+
+### Stocking Densities for TC Ponds
+
+`r StockDensityBySpecies_TC_Table`
+
+### Stocking Densities for PC Ponds
+
+`r StockDensityBySpecies_PC_Table`
+
+### Stocking Densities for TP Ponds
+
+`r StockDensityBySpecies_TP_Table`
+
+### Adjusted Yields
+
+The yields are corrected for reported mortality within the ponds.  The means yields are:
+
+`r Yields_DF_Table`
+
+For TPC ponds:
+
+`r Yields_DF_TPC_Table`
+
+For TC ponds:
+
+`r Yields_DF_TC_Table`
+
+For PC ponds:
+
+`r Yields_DF_PC_Table`
+
+For TP ponds:
+
+`r Yields_DF_TP_Table`
+
+## Economics of farm practices and the effect of different polyculture practices
+
+In this section the data is used to work out the economics of the finfish aquaculture and assess the impact of different types of polyculture. In particular, this focusses on tilapia, pangasius and the inclusion of carp - often used a maintain pond water quality by using the primary production from the pond and feeding from the bottom.
+
+```{r Economics, code_folding = 'hide'}
+###################################################
+#
+# Now add the economics to this
+#
+# Price of fingerlings
+# Value of harvest
+# Cost of feed
+###################################################
+# Set the conversion rate to dollar
+Conversion = 1/80
+# Read in the feed cost look up table
+FeedCostDF <- read.csv("FeedPrices.csv", header = TRUE)
+
+# Calculate the feed needed per harvested fish using the FCR and harvest weight
+SurveyData[, Feed_Tila := (((SurveyData$Tilapia.Weight.at.Harvest..g. - SurveyData$Tilapia.Fingerlings.Weight..g.)/1000) * SurveyData$Food.Conversion.Ratio.of.the.Pond)]
+SurveyData[, Feed_Pang := (((SurveyData$Pangasius.Weight.at.Harvest..g. - SurveyData$Pangasius.Fingerlings.Weight..g.)/1000) * SurveyData$Food.Conversion.Ratio.of.the.Pond)]
+SurveyData[, Feed_Carp := (((SurveyData$Carp.Weight.at.Harvest..g. - SurveyData$Carp.Fingerlings.Weight..g.)/1000) * SurveyData$Food.Conversion.Ratio.of.the.Pond)]
+
+# Calculate the total feed required
+SurveyData[, Total_Feed_Needed := rowSums(.SD, na.rm = TRUE), .SDcols = c("Feed_Tila", "Feed_Pang", "Feed_Carp")]
+
+##################################################################
+# Get the feed that is used by carp from Pang/Tilapia feed
+##################################################################
+# Here using the same approach as above but with estimates of the amounts of feed used by carp
+# Best case is when carp use just the primary productivity and waste from other feed
+# Worst case is when carp need feeding
+# Realistic case is using the proportions of carp species to average this
+SurveyData[, Carp_Feed_Best := 0]
+
+# For worst case grass/mirror use 70% feed (sinking) & 80% feed (floating)
+SurveyData[, Carp_Feed_Worst := ((Feed_Carp * 0.7 * OwnFeed) + (Feed_Carp * 0.7 * SinkFeed) + (Feed_Carp * 0.7 * FloatFeed))]
+
+# Now realistic based on proportion of carp produced in Mymensingh
+# Put in values to correct for food obtained from the pond by specific species by feeding group
+GrassMirror_2018 <- 0.333 # 33.3% of productivity in 2018 in Mymensingh was grass (11.4) and mirror (6.42) & other (15.5)
+GrassMirror_Sink <- 0.7 * GrassMirror_2018 # Gets 30% of food from pond
+GrassMirror_Float <- 0.8 * GrassMirror_2018 # Gets 20% of food from pond
+
+RuiGonia_2018 <- 0.241 # 24.1% of productivity in 2018 in Mymensingh was rui (19.1) & gonia (4.99)
+RuiGonia_Sink <- 0.5 * RuiGonia_2018 # Gets 50% of food from pond
+RuiGonia_Float <- 0.5 * RuiGonia_2018 # Gets 50% of food from pond
+
+BataSilver_2018 <- 0.250 # 24.98% of productivity in 2018 in Mymensingh was bata (7.48) & silver (17.5) 
+BataSilver_Sink <- 0 # Gets 100% of food from pond
+BataSilver_Float <- 0 # Gets 100% of food from pond
+
+Mrigal_2018 <- 0.176 # 17.6% of productivity in 2018 in Mymensingh was from Mrigal
+Mrigal_Sink <- 0.5 * Mrigal_2018 # Gets 50% of food from pond
+Mrigal_Float <- 0.2 * Mrigal_2018 # Gets 80% of food from pond
+
+Real_Carp_Sink <- GrassMirror_Sink + RuiGonia_Sink + BataSilver_Sink + Mrigal_Sink
+Real_Carp_Float <- GrassMirror_Float + RuiGonia_Float + BataSilver_Float + Mrigal_Float
+
+SurveyData[, Carp_Feed_Real := ((Feed_Carp * Real_Carp_Sink * OwnFeed) + (Feed_Carp * Real_Carp_Sink * SinkFeed) + (Feed_Carp * Real_Carp_Float * FloatFeed))]
+
+# Calculate the cost based on own and company feed for 1 fish in each pond
+Cost_own_feed <- FeedCostDF[5, 9] # estimate
+
+SurveyData[, Cost_Tila := -((Feed_Tila * Cost_own_feed * own) + (Feed_Tila * FeedCostDF[4, 9] * float) + (Feed_Tila * FeedCostDF[3, 9] * sink))]
+SurveyData[, Cost_Pang := -((Feed_Pang * Cost_own_feed * own) + (Feed_Pang * FeedCostDF[2, 9] * float) + (Feed_Pang * FeedCostDF[1, 9] * sink))]
+SurveyData[, Cost_Carp_Best := -((Carp_Feed_Best * Cost_own_feed * own) + (Carp_Feed_Best * FeedCostDF[7, 9] * float) + (Carp_Feed_Best * FeedCostDF[6, 9] * sink))]
+SurveyData[, Cost_Carp_Worst := -((Carp_Feed_Worst * Cost_own_feed * own) + (Carp_Feed_Worst * FeedCostDF[7, 9] * float) + (Carp_Feed_Worst * FeedCostDF[6, 9] * sink))]
+SurveyData[, Cost_Carp_Real := -((Carp_Feed_Real * Cost_own_feed * own) + (Carp_Feed_Real * FeedCostDF[7, 9] * float) + (Carp_Feed_Real * FeedCostDF[6, 9] * sink))]
+
+##########################################################
+# Adjust cost by number of fish and adjust for mort level
+################################################################
+SurveyData[, Cost_Tila := (Cost_Tila * Number.of.Tilapia.Stocked * TilaMort * Conversion)]
+SurveyData[, Cost_Pang := (Cost_Pang * Number.of.Pangasius.Stocked * PangMort * Conversion)]
+SurveyData[, Cost_Carp_Best := (Cost_Carp_Best * Number.of.Carp.Fish.Stocked * CarpMort * Conversion)]
+SurveyData[, Cost_Carp_Worst := (Cost_Carp_Worst * Number.of.Carp.Fish.Stocked * CarpMort * Conversion)]
+SurveyData[, Cost_Carp_Real := (Cost_Carp_Real * Number.of.Carp.Fish.Stocked * CarpMort * Conversion)]
+
+# Adjust the total to be cost per ha farm
+Dec2Hec <- 0.004046
+SurveyData[, Cost_Tila_Hectare := (Cost_Tila/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Cost_Pang_Hectare := (Cost_Pang/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Cost_Carp_Hectare_Best := (Cost_Carp_Best/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Cost_Carp_Hectare_Worst := (Cost_Carp_Worst/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Cost_Carp_Hectare_Real := (Cost_Carp_Real/(Pond.surface.area * Dec2Hec))]
+
+# Get the overall feed costs
+SurveyData[, Cost_Overall_Hectare := rowSums(.SD, na.rm = TRUE), .SDcols = c("Cost_Tila_Hectare", "Cost_Pang_Hectare", "Cost_Carp_Hectare_Real")]
+SurveyData[Cost_Overall_Hectare == 0, Cost_Overall_Hectare := NA]
+#################################################
+# Cost of fingerlings
+#################################################
+# Read in the cost data
+FingerlingCostDF <- read.csv("FingerlingPrices.csv", header = TRUE)
+SurveyData[, Finger_Cost_Tila := -(Number.of.Tilapia.Stocked * FingerlingCostDF[1,2] * Conversion)]
+SurveyData[, Finger_Cost_Pang := -(Number.of.Pangasius.Stocked * FingerlingCostDF[2,2] * Conversion)]
+SurveyData[, Finger_Cost_Carp := -(Number.of.Carp.Fish.Stocked * FingerlingCostDF[3,2] * Conversion)]
+
+SurveyData[, Finger_Cost_Tila_Hectare := (Finger_Cost_Tila/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Finger_Cost_Pang_Hectare := (Finger_Cost_Pang/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Finger_Cost_Carp_Hectare := (Finger_Cost_Carp/(Pond.surface.area * Dec2Hec))]
+
+#################################################
+# Get the harvest value - take 2019 prices
+#
+# In this section this is PER HARVEST CYCLE
+#################################################
+FarmGatePrice <- read.csv("FarmGatePrices.csv", header = TRUE)
+SurveyData[, Harvest_Tila := (((Tilapia.Weight.at.Harvest..g. * Number.of.Tilapia.Stocked)/1000) * TilaMort * FarmGatePrice[1,5] * Conversion)]
+SurveyData[, Harvest_Pang := (((Pangasius.Weight.at.Harvest..g. * Number.of.Pangasius.Stocked)/1000) * PangMort * FarmGatePrice[2,5] * Conversion)]
+SurveyData[, Harvest_Carp := (((Carp.Weight.at.Harvest..g. * Number.of.Carp.Fish.Stocked)/1000) * CarpMort * FarmGatePrice[3,5] * Conversion)]
+
+SurveyData[, Harvest_Tila_Hectare := (Harvest_Tila/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Harvest_Pang_Hectare := (Harvest_Pang/(Pond.surface.area * Dec2Hec))]
+SurveyData[, Harvest_Carp_Hectare := (Harvest_Carp/(Pond.surface.area * Dec2Hec))]
+
+SurveyData[, Harvest_Overall := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Tila", "Harvest_Pang", "Harvest_Carp")]
+SurveyData[, Harvest_Overall_Hectare := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Tila_Hectare", "Harvest_Pang_Hectare", "Harvest_Carp_Hectare")]
+###########################################################
+# Work out the additional costs
+#
+# Assume flat fee for carps as cultured with pang or tila
+###########################################################
+AddCosts <- read.csv("AdditionalCosts.csv", header = TRUE)
+Tila_AddCost <- sum(AddCosts[ ,2])
+Pang_AddCost <- sum(AddCosts[ ,3])
+Carp_AddCost <- sum(AddCosts[ ,3]) * 0.5
+
+# Split the additional costs for pang and tilapia farming 50:50 if both present
+SurveyData[PolyCult == "TC", AddCost_Tila := -(Pond.surface.area * Dec2Hec * Tila_AddCost * 1 * Conversion)]
+SurveyData[PolyCult == "TC", AddCost_Pang := 0]
+SurveyData[PolyCult == "TC", AddCost_Carp := -(Pond.surface.area * Dec2Hec * Carp_AddCost * 1 * Conversion)]
+
+SurveyData[PolyCult == "PC", AddCost_Pang := -(Pond.surface.area * Dec2Hec * Pang_AddCost * 1 * Conversion)]
+SurveyData[PolyCult == "PC", AddCost_Tila := 0]
+SurveyData[PolyCult == "PC", AddCost_Carp := -(Pond.surface.area * Dec2Hec * Carp_AddCost * 1 * Conversion)]
+
+SurveyData[PolyCult == "TP", AddCost_Tila := -(Pond.surface.area * Dec2Hec * Tila_AddCost * 0.5 * Conversion)]
+SurveyData[PolyCult == "TP", AddCost_Pang := -(Pond.surface.area * Dec2Hec * Pang_AddCost * 0.5 * Conversion)]
+SurveyData[PolyCult == "TP", AddCost_Carp := 0]
+
+SurveyData[PolyCult == "TPC", AddCost_Tila := -(Pond.surface.area * Dec2Hec * Tila_AddCost * 0.5 * Conversion)]
+SurveyData[PolyCult == "TPC", AddCost_Pang := -(Pond.surface.area * Dec2Hec * Pang_AddCost * 0.5 * Conversion)]
+SurveyData[PolyCult == "TPC", AddCost_Carp := -(Pond.surface.area * Dec2Hec * Carp_AddCost * 1 * Conversion)]
+
+#################################################
+# Work out total costs
+#################################################
+SurveyData[, total_cost_Tila := rowSums(.SD, na.rm = TRUE), .SDcols = c("Cost_Tila", "Finger_Cost_Tila", "AddCost_Tila")]
+SurveyData[, total_cost_Pang := rowSums(.SD, na.rm = TRUE), .SDcols = c("Cost_Pang", "Finger_Cost_Pang", "AddCost_Pang")]
+SurveyData[, total_cost_Carp_Real := rowSums(.SD, na.rm = TRUE), .SDcols = c("Cost_Carp_Real", "Finger_Cost_Carp", "AddCost_Carp")]
+SurveyData[, total_cost_Carp_Best := rowSums(.SD, na.rm = TRUE), .SDcols = c("Cost_Carp_Best", "Finger_Cost_Carp", "AddCost_Carp")]
+SurveyData[, total_cost_Carp_Worst := rowSums(.SD, na.rm = TRUE), .SDcols = c("Cost_Carp_Worst", "Finger_Cost_Carp", "AddCost_Carp")]
+
+SurveyData[, total_cost_Tila_hectare := (total_cost_Tila/(Pond.surface.area * Dec2Hec))]
+SurveyData[, total_cost_Pang_hectare := (total_cost_Pang/(Pond.surface.area * Dec2Hec))]
+SurveyData[, total_cost_Carp_hectare := (total_cost_Carp_Real/(Pond.surface.area * Dec2Hec))]
+
+SurveyData[, Overall_TotalCost := rowSums(.SD, na.rm = TRUE), .SDcols = c("total_cost_Tila_hectare","total_cost_Pang_hectare", "total_cost_Carp_hectare")]
+SurveyData[Overall_TotalCost == 0, Overall_TotalCost := NA]
+#################################################
+# Work out profit
+#################################################
+SurveyData[, profit_Tila := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Tila", "total_cost_Tila")]
+SurveyData[, profit_Pang := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Pang", "total_cost_Pang")]
+SurveyData[, profit_Carp_Real := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Carp", "total_cost_Carp_Real")]
+
+###################################################
+# Benefit cost ratio - separately
+###################################################
+SurveyData[, BCR_tila := (Harvest_Tila/-total_cost_Tila)]
+SurveyData[, BCR_pang := (Harvest_Pang/-total_cost_Pang)]
+SurveyData[, BCR_Carp := (Harvest_Carp/-total_cost_Carp_Real)]
+
+####################################################
+# BCR overall
+#####################################################
+SurveyData[, Overall_BCR := (Harvest_Overall_Hectare/-Overall_TotalCost)]
+################################################
+# Scale to per fish
+###############################################
+SurveyData[, profit_Per_Tila := (profit_Tila / Number.of.Tilapia.Stocked)]
+SurveyData[, profit_Per_Pang := (profit_Pang / Number.of.Pangasius.Stocked)]
+SurveyData[, profit_Per_Carp := (profit_Carp_Real / Number.of.Carp.Fish.Stocked )]
+
+###################################################################
+# Output the data for reporting
+###################################################################
+knitr::kable(data.frame(rbind(
+  c("Mean Harvest revenue per ha: overall", SurveyData[, mean(Harvest_Overall_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: tilapia", SurveyData[, mean(Harvest_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: pangasius", SurveyData[, mean(Harvest_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: carp", SurveyData[, mean(Harvest_Carp_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: overall", SurveyData[, mean(Cost_Overall_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost: tilapia", SurveyData[, mean(Cost_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost: pangasius", SurveyData[, mean(Cost_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost: carp", SurveyData[, mean(Cost_Carp_Hectare_Real, na.rm = TRUE)]),
+  c("Mean BCR: tilapia", SurveyData[, mean(BCR_tila, na.rm = TRUE)]),
+  c("Mean BCR: pangasius", SurveyData[, mean(BCR_pang, na.rm = TRUE)]),
+  c("Mean BCR: carp", SurveyData[, mean(BCR_Carp, na.rm = TRUE)]),
+  c("Mean BCR: overall", SurveyData[, mean(Overall_BCR, na.rm = TRUE)]),
+  c("Mean Profit per tilapia", SurveyData[, mean(profit_Per_Tila, na.rm = TRUE)]),
+  c("Mean Profit per pangasius", SurveyData[, mean(profit_Per_Pang, na.rm = TRUE)]),
+  c("Mean Profit per carp", SurveyData[, mean(profit_Per_Carp, na.rm = TRUE)])
+  ))
+  , caption = "Economic Factors in Pond Practice")
+
+
+#############################################
+# Split economics according to polyculture
+#################################################################################################
+#
+# In this section we assume 2 tilapia harvests for 1 pangasius and 1 carp per production cycle
+#
+#################################################################################################
+PangProductionCycle <- 1
+TilaProductionCycle <- 2
+CarpProductionCycle <- 1
+
+# Work out harvest revenue per production cycle
+SurveyData[, Harvest_Tila_Hectare_PC := Harvest_Tila_Hectare * TilaProductionCycle]
+SurveyData[, Harvest_Pang_Hectare_PC := Harvest_Pang_Hectare * PangProductionCycle]
+SurveyData[, Harvest_Carp_Hectare_PC := Harvest_Carp_Hectare * CarpProductionCycle]
+SurveyData[, Overall_Harvest_Hectare_PC := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Tila_Hectare_PC","Harvest_Pang_Hectare_PC","Harvest_Carp_Hectare_PC")]
+
+# Work out the total costs per production cycle
+SurveyData[, total_cost_Tila_hectare_PC := total_cost_Tila_hectare * TilaProductionCycle]
+SurveyData[, total_cost_Pang_hectare_PC := total_cost_Pang_hectare * PangProductionCycle]
+SurveyData[, total_cost_Carp_hectare_PC := total_cost_Carp_hectare * CarpProductionCycle]
+SurveyData[, Overall_Cost_Hectare_PC := rowSums(.SD, na.rm = TRUE), .SDcols = c("total_cost_Tila_hectare_PC","total_cost_Pang_hectare_PC","total_cost_Carp_hectare_PC")]
+
+# Work out the total profit per production cycle
+SurveyData[, profit_Tila_hectare_PC := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Tila_Hectare_PC", "total_cost_Tila_hectare_PC")]
+SurveyData[, profit_Pang_hectare_PC := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Pang_Hectare_PC", "total_cost_Pang_hectare_PC")]
+SurveyData[, profit_Carp_hectare_PC := rowSums(.SD, na.rm = TRUE), .SDcols = c("Harvest_Carp_Hectare_PC", "total_cost_Carp_hectare_PC")]
+SurveyData[, Overall_profit_hectare_PC := rowSums(.SD, na.rm = TRUE), .SDcols = c("Overall_Harvest_Hectare_PC", "Overall_Cost_Hectare_PC")]
+
+knitr::kable(data.frame(rbind(
+  c("Mean Harvest revenue per ha: overall TP Ponds", SurveyData[PolyCult == "TP", mean(Overall_Harvest_Hectare_PC, na.rm = TRUE)]),
+  c("Sample size for Harvest revenue: overall TP Ponds", SurveyData[PolyCult == "TP" & !is.na(Overall_Harvest_Hectare_PC), .N]),
+  
+  c("Mean Harvest revenue per ha: overall TC Ponds", SurveyData[PolyCult == "TC", mean(Overall_Harvest_Hectare_PC, na.rm = TRUE)]),
+  c("Sample size for Harvest revenue: overall TC Ponds", SurveyData[PolyCult == "TC" & !is.na(Overall_Harvest_Hectare_PC), .N]),
+  
+  c("Mean Harvest revenue per ha: overall PC Ponds", SurveyData[PolyCult == "PC", mean(Overall_Harvest_Hectare_PC, na.rm = TRUE)]),
+  c("Sample size for Harvest revenue: overall PC Ponds", SurveyData[PolyCult == "PC" & !is.na(Overall_Harvest_Hectare_PC), .N]),
+  
+  c("Mean Harvest revenue per ha: overall TPC Ponds", SurveyData[PolyCult == "TPC", mean(Overall_Harvest_Hectare_PC, na.rm = TRUE)]),
+  c("Sample size for Harvest revenue: overall TPC Ponds", SurveyData[PolyCult == "TPC" & !is.na(Overall_Harvest_Hectare_PC), .N]),
+  
+  c("Mean Harvest revenue per ha: tilapia in TP ponds", SurveyData[PolyCult == "TP", mean(Harvest_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: tilapia in TC ponds", SurveyData[PolyCult == "TC", mean(Harvest_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: tilapia in PC ponds", SurveyData[PolyCult == "PC", mean(Harvest_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: tilapia in TPC ponds", SurveyData[PolyCult == "TPC", mean(Harvest_Tila_Hectare, na.rm = TRUE)]),
+  
+  c("Mean Harvest revenue per ha: pangasius in TP ponds", SurveyData[PolyCult == "TP", mean(Harvest_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: pangasius in TC ponds", SurveyData[PolyCult == "TC", mean(Harvest_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: pangasius in PC ponds", SurveyData[PolyCult == "PC", mean(Harvest_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: pangasius in TPC ponds", SurveyData[PolyCult == "TPC", mean(Harvest_Pang_Hectare, na.rm = TRUE)]),
+  
+  c("Mean Harvest revenue per ha: carp in TP ponds", SurveyData[PolyCult == "TP", mean(Harvest_Carp_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: carp in TC ponds", SurveyData[PolyCult == "TC", mean(Harvest_Carp_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: carp in PC ponds", SurveyData[PolyCult == "PC", mean(Harvest_Carp_Hectare, na.rm = TRUE)]),
+  c("Mean Harvest revenue per ha: carp in TPC ponds", SurveyData[PolyCult == "TPC", mean(Harvest_Carp_Hectare, na.rm = TRUE)]),
+  
+  c("Mean Feed cost per ha: overall in TP ponds", SurveyData[PolyCult == "TP", mean(Cost_Overall_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: overall in TC ponds", SurveyData[PolyCult == "TC", mean(Cost_Overall_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: overall in PC ponds", SurveyData[PolyCult == "PC", mean(Cost_Overall_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: overall in TPC ponds", SurveyData[PolyCult == "TPC", mean(Cost_Overall_Hectare, na.rm = TRUE)]),
+  
+  c("Mean Feed cost per ha: tilapia in TP ponds", SurveyData[PolyCult == "TP", mean(Cost_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: tilapia in TC ponds", SurveyData[PolyCult == "TC", mean(Cost_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: tilapia in PC ponds", SurveyData[PolyCult == "PC", mean(Cost_Tila_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: tilapia in TPC ponds", SurveyData[PolyCult == "TPC", mean(Cost_Tila_Hectare, na.rm = TRUE)]),
+  
+  c("Mean Feed cost per ha: pangasius in TP ponds", SurveyData[PolyCult == "TP", mean(Cost_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: pangasius in TC ponds", SurveyData[PolyCult == "TC", mean(Cost_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: pangasius in PC ponds", SurveyData[PolyCult == "PC", mean(Cost_Pang_Hectare, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: pangasius in TPC ponds", SurveyData[PolyCult == "TPC", mean(Cost_Pang_Hectare, na.rm = TRUE)]),
+  
+  c("Mean Feed cost per ha: carp in TP ponds", SurveyData[PolyCult == "TP", mean(Cost_Carp_Hectare_Real, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: carp in TC ponds", SurveyData[PolyCult == "TC", mean(Cost_Carp_Hectare_Real, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: carp in PC ponds", SurveyData[PolyCult == "PC", mean(Cost_Carp_Hectare_Real, na.rm = TRUE)]),
+  c("Mean Feed cost per ha: carp in TPC ponds", SurveyData[PolyCult == "TPC", mean(Cost_Carp_Hectare_Real, na.rm = TRUE)]),
+  
+  c("Mean total cost per ha: in TP ponds", SurveyData[PolyCult == "TP", mean(Overall_TotalCost, na.rm = TRUE)]),
+  c("Mean total cost per ha: in TC ponds", SurveyData[PolyCult == "TC", mean(Overall_TotalCost, na.rm = TRUE)]),
+  c("Mean total cost per ha: in PC ponds", SurveyData[PolyCult == "PC", mean(Overall_TotalCost, na.rm = TRUE)]),
+  c("Mean total cost per ha: in TPC ponds", SurveyData[PolyCult == "TPC", mean(Overall_TotalCost, na.rm = TRUE)]),
+  c("Mean total cost per ha: Overall", SurveyData[, mean(Overall_TotalCost, na.rm = TRUE)]),
+  
+  c("Mean BCR: tilapia in TP ponds", SurveyData[PolyCult == "TP", mean(BCR_tila, na.rm = TRUE)]),
+  c("Mean BCR: tilapia in TC ponds", SurveyData[PolyCult == "TC", mean(BCR_tila, na.rm = TRUE)]),
+  c("Mean BCR: tilapia in PC ponds", SurveyData[PolyCult == "PC", mean(BCR_tila, na.rm = TRUE)]),
+  c("Mean BCR: tilapia in TPC ponds", SurveyData[PolyCult == "TPC", mean(BCR_tila, na.rm = TRUE)]),
+  
+  c("Mean BCR: pangasius in TP ponds", SurveyData[PolyCult == "TP", mean(BCR_pang, na.rm = TRUE)]),
+  c("Mean BCR: pangasius in TC ponds", SurveyData[PolyCult == "TC", mean(BCR_pang, na.rm = TRUE)]),
+  c("Mean BCR: pangasius in PC ponds", SurveyData[PolyCult == "PC", mean(BCR_pang, na.rm = TRUE)]),
+  c("Mean BCR: pangasius in TPC ponds", SurveyData[PolyCult == "TPC", mean(BCR_pang, na.rm = TRUE)]),
+  
+  c("Mean BCR: carp in TP ponds", SurveyData[PolyCult == "TP", mean(BCR_Carp, na.rm = TRUE)]),
+  c("Mean BCR: carp in TC ponds", SurveyData[PolyCult == "TC", mean(BCR_Carp, na.rm = TRUE)]),
+  c("Mean BCR: carp in PC ponds", SurveyData[PolyCult == "PC", mean(BCR_Carp, na.rm = TRUE)]),
+  c("Mean BCR: carp in TPC ponds", SurveyData[PolyCult == "TPC", mean(BCR_Carp, na.rm = TRUE)]),
+  
+  c("Mean BCR: overall in TP ponds", SurveyData[PolyCult == "TP", mean(Overall_BCR, na.rm = TRUE)]),
+  c("Mean BCR: overall in TC ponds", SurveyData[PolyCult == "TC", mean(Overall_BCR, na.rm = TRUE)]),
+  c("Mean BCR: overall in PC ponds", SurveyData[PolyCult == "PC", mean(Overall_BCR, na.rm = TRUE)]),
+  c("Mean BCR: overall in TPC ponds", SurveyData[PolyCult == "TPC", mean(Overall_BCR, na.rm = TRUE)]),
+  
+  c("Mean Profit per tilapia in TP ponds", SurveyData[PolyCult == "TP", mean(profit_Per_Tila, na.rm = TRUE)]),
+  c("Mean Profit per tilapia in TC ponds", SurveyData[PolyCult == "TC", mean(profit_Per_Tila, na.rm = TRUE)]),
+  c("Mean Profit per tilapia in PC ponds", SurveyData[PolyCult == "PC", mean(profit_Per_Tila, na.rm = TRUE)]),
+  c("Mean Profit per tilapia in TPC ponds", SurveyData[PolyCult == "TPC", mean(profit_Per_Tila, na.rm = TRUE)]),
+  
+  c("Mean Profit per pangasius in TP ponds", SurveyData[PolyCult == "TP", mean(profit_Per_Pang, na.rm = TRUE)]),
+  c("Mean Profit per pangasius in TC ponds", SurveyData[PolyCult == "TC", mean(profit_Per_Pang, na.rm = TRUE)]),
+  c("Mean Profit per pangasius in PC ponds", SurveyData[PolyCult == "PC", mean(profit_Per_Pang, na.rm = TRUE)]),
+  c("Mean Profit per pangasius in TPC ponds", SurveyData[PolyCult == "TPC", mean(profit_Per_Pang, na.rm = TRUE)]),
+  
+  c("Mean Profit per carp in TP ponds", SurveyData[PolyCult == "TP", mean(profit_Per_Carp, na.rm = TRUE)]),
+  c("Mean Profit per carp in TC ponds", SurveyData[PolyCult == "TC", mean(profit_Per_Carp, na.rm = TRUE)]),
+  c("Mean Profit per carp in PC ponds", SurveyData[PolyCult == "PC", mean(profit_Per_Carp, na.rm = TRUE)]),
+  c("Mean Profit per carp in TPC ponds", SurveyData[PolyCult == "TPC", mean(profit_Per_Carp, na.rm = TRUE)])
+  
+  ))
+  , caption = "Economic Factors in Pond Practice by Polyculture type")
+
+########################################################################
+# Work out imputed costs = per hectare
+########################################################################
+# Length of pang cycle = 7 months, tilapia = 3.5 months
+Pang_cycle <- 28
+Carp_cycle <- 28
+Tila_cycle <- 14
+
+# Fingerling cost at start
+StartUp_Pang_Hectare <- SurveyData[, mean(Finger_Cost_Pang_Hectare, na.rm = TRUE)]
+StartUp_Tila_Hectare <- SurveyData[, mean(Finger_Cost_Tila_Hectare, na.rm = TRUE)]
+StartUp_Carp_Hectare <- SurveyData[, mean(Finger_Cost_Carp_Hectare, na.rm = TRUE)]
+
+# Feed cost per week PLUS farm costs
+Weekly_Feed_Pang_Hectare <- SurveyData[, mean(Cost_Pang_Hectare, na.rm = TRUE)]/Pang_cycle
+Weekly_Feed_Tila_Hectare <- SurveyData[, mean(Cost_Tila_Hectare, na.rm = TRUE)]/Tila_cycle
+Weekly_Feed_Carp_Hectare <- SurveyData[, mean(Cost_Carp_Hectare_Real, na.rm = TRUE)]/Carp_cycle
+
+FarmCost_Tila <- (sum(AddCosts$Tilapia.Price.per.ha)/Tila_cycle) * Conversion # per hectare per week
+FarmCost_Pang <- (sum(AddCosts$Pangasius.price.per.ha)/Pang_cycle) * Conversion  # per hectare per week
+FarmCost_Carp <- (sum(AddCosts$Pangasius.price.per.ha)/Pang_cycle) * Conversion  # per hectare per week
+
+# Here are the interest rates
+IntRate_10 <- 10/100
+IntRate_5 <- 5/100
+
+#############################################
+# Run pang simulation - output in USD
+#############################################
+ModelCost_10 <- StartUp_Pang_Hectare
+ModelCost_5 <- StartUp_Pang_Hectare
+print(paste0("The start up cost - mean cost of pangasius fingerlings is: ", ModelCost_10))
+for (i in 1:Pang_cycle){
+  # Weekly interest rate
+  print(paste0("Pangasius Production Cycle Week ", i))
+  Interest_10 <- ModelCost_10 * (IntRate_10/52)
+  Interest_5 <- ModelCost_5 * (IntRate_5/52)
+  print(paste0("Interest cost at 10%: ", Interest_10))
+  #print(Interest_5)
+  ModelCost_10 <- ModelCost_10 + Interest_10 + Weekly_Feed_Pang_Hectare + FarmCost_Pang
+  ModelCost_5 <- ModelCost_5 + Interest_5 + Weekly_Feed_Pang_Hectare + FarmCost_Pang
+  print(paste("Cumulative cost for pangasius production per hectare with interest at 10% is:", ModelCost_10))
+  #print(paste("Total cost with interest at 5% is:", ModelCost_5))
+}
+
+CumInterest_Pang <- ModelCost_10 - (StartUp_Pang_Hectare) - (Pang_cycle * (Weekly_Feed_Pang_Hectare+ FarmCost_Pang))
+print(paste0("The cumulative interest cost per hectare for pangasius is: ",CumInterest_Pang))
+print(paste0("For an average farm the capital risk for pangasius is:  ",(ModelCost_10 * (SurveyData[, mean(Pond.surface.area, na.rm = TRUE)] * Dec2Hec)), " per farm."))
+print(paste0("For the average farm in the study this interest costs : ", (CumInterest_Pang * (SurveyData[, mean(Pond.surface.area, na.rm = TRUE)] * Dec2Hec)), " per farm."))
+
+##################################
+# Run tila simulation
+##################################
+Tila_ModelCost_10 <- StartUp_Tila_Hectare
+Tila_ModelCost_5 <- StartUp_Tila_Hectare
+print(paste0("The start up cost - mean cost of tilapia fingerlings is: ", Tila_ModelCost_10))
+for (i in 1:Tila_cycle){
+  # Weekly interest rate
+  print(paste0("Tilapia Production Cycle Week ", i))
+  Tila_Interest_10 <- Tila_ModelCost_10 * (IntRate_10/52)
+  Tila_Interest_5 <- Tila_ModelCost_5 * (IntRate_5/52)
+  print(paste0("Interest cost at 10%: ", Interest_10))
+  #print(Tila_Interest_5)
+  Tila_ModelCost_10 <- Tila_ModelCost_10 + Tila_Interest_10 + Weekly_Feed_Tila_Hectare + FarmCost_Tila
+  Tila_ModelCost_5 <- Tila_ModelCost_5 + Tila_Interest_5 + Weekly_Feed_Tila_Hectare + FarmCost_Tila
+  print(paste("Cumulative cost tilapia with interest at 10% is:", Tila_ModelCost_10))
+  #print(paste("Total cost tilapia with interest at 5% is:", Tila_ModelCost_5))
+}
+
+CumInterest <- Tila_ModelCost_10 - (StartUp_Tila_Hectare) - (Tila_cycle * (Weekly_Feed_Tila_Hectare+ FarmCost_Tila))
+print(paste0("The cumulative interest cost per hectare for tilapia is: ", CumInterest))
+print(paste0("For an average farm the capital risk for tilapia is: ",(Tila_ModelCost_10 * (SurveyData[, mean(Pond.surface.area, na.rm = TRUE)] * Dec2Hec)), " per farm."))
+print(paste0("For the average farm in the study this interest costs : ", (CumInterest * (SurveyData[, mean(Pond.surface.area, na.rm = TRUE)] * Dec2Hec)), " per farm."))
+
+#############################################
+# Run carp simulation - output in USD
+#############################################
+Carp_ModelCost_10 <- StartUp_Carp_Hectare
+Carp_ModelCost_5 <- StartUp_Carp_Hectare
+print(paste0("The start up cost - mean cost of carp fingerlings is: ", Carp_ModelCost_10))
+for (i in 1:Carp_cycle){
+  # Weekly interest rate
+  print(paste0("Carp Production Cycle Week ", i))
+  Interest_10 <- Carp_ModelCost_10 * (IntRate_10/52)
+  Interest_5 <- Carp_ModelCost_5 * (IntRate_5/52)
+  print(paste0("Interest cost at 10%: ", Interest_10))
+  #print(Interest_5)
+  Carp_ModelCost_10 <- Carp_ModelCost_10 + Interest_10 + Weekly_Feed_Carp_Hectare + FarmCost_Carp
+  Carp_ModelCost_5 <- Carp_ModelCost_5 + Interest_5 + Weekly_Feed_Carp_Hectare + FarmCost_Carp
+  print(paste("Cumulative cost for carp production per hectare with interest at 10% is:", Carp_ModelCost_10))
+  #print(paste("Total cost with interest at 5% is:", ModelCost_5))
+}
+
+CumInterest_Carp <- Carp_ModelCost_10 - (StartUp_Carp_Hectare) - (Carp_cycle * (Weekly_Feed_Carp_Hectare+ FarmCost_Carp))
+print(paste0("The cumulative interest cost per hectare for Carp is: ",CumInterest_Carp))
+print(paste0("For an average farm the capital risk for Carp is: ",(Carp_ModelCost_10 * (SurveyData[, mean(Pond.surface.area, na.rm = TRUE)] * Dec2Hec)), " per farm."))
+print(paste0("For the average farm in the study this interest costs : ", (CumInterest_Carp * (SurveyData[, mean(Pond.surface.area, na.rm = TRUE)] * Dec2Hec)), " per farm."))
+```
+
+## Plots for the Paper
+
+Here are the plots for the Aquaculture International Paper and a few extra supplementary plots.
+
+```{r Plots for Report, code_folding = 'hide'}
+#########################################
+# Plot of stock density
+#########################################
+library(plotly)
+Total_Stock_Density <- SurveyData$Overall_Density
+Tila_Stock_Density <- SurveyData$Number.of.Tilapia.Stocked/pond_surface_area
+Carp_Stock_Density <- SurveyData$Number.of.Carp.Fish.Stocked/pond_surface_area
+Pang_Stock_Density <- SurveyData$Number.of.Pangasius.Stocked/pond_surface_area
+
+Stock_Box <- plot_ly(type = 'violin') %>%
+  add_trace(x ="Total", y = Total_Stock_Density,
+            fillcolor = 'rgb(200,200,200)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)'),
+            width = 0.7,
+            box = list(visible = T),
+            meanline = list(visible = T),
+            points = "outliers", jitter = 1, pointpos = 0) %>%
+  add_trace(x ="Carp", y = Carp_Stock_Density,
+            fillcolor = 'rgb(180,180,180)',
+            width = 0.7,
+            box = list(visible = T),
+            meanline = list(visible = T),
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)'),
+            points = "outliers", jitter = 1, pointpos = 0) %>%
+  add_trace(x ="Tilapia", y = Tila_Stock_Density,
+            fillcolor = 'rgb(200,200,200)',
+            width = 0.7,
+            box = list(visible = T),
+            meanline = list(visible = T),
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)'),
+            points = "outliers", jitter = 1, pointpos = 0) %>%
+  add_trace(x ="Pangasius", y = Pang_Stock_Density,
+            fillcolor = 'rgb(200,200,200)',
+            width = 0.7,
+            box = list(visible = T),
+            meanline = list(visible = T),
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)'),
+            points = "outliers", jitter = 1, pointpos = 0) %>%
+  layout(showlegend = FALSE,
+         xaxis = list(title = "Stock", showline = TRUE, zeroline = FALSE),
+         yaxis = list(title = "Stocking Density (Fish m<sup>-2</sup>)", showline = TRUE, zeroline = FALSE))
+
+FigFolder <- "C:\\Users\\rh21\\OneDrive - CEFAS\\Project Work\\C6771A - Bangladesh Farm Survey\\Aquaculture Submission\\Figures"
+orca(Stock_Box, file = "StockDensities.svg")
+#library(magick)
+#im <- image_read_svg("Fig4.svg")
+#image_write(im, "Fig4.jpeg", format = "jpeg")
+
+##############################################################
+# Average weight gain per fish
+##############################################################
+WtGain_Tila <- (SurveyData$Tilapia.Weight.at.Harvest..g. - SurveyData$Tilapia.Fingerlings.Weight..g.) / 1000
+WtGain_Pang <- (SurveyData$Pangasius.Weight.at.Harvest..g. - SurveyData$Pangasius.Fingerlings.Weight..g.) / 1000
+WtGain_Carp <- (SurveyData$Carp.Weight.at.Harvest..g. - SurveyData$Carp.Fingerlings.Weight..g.) / 1000
+
+Prod_DF <- data.frame(cbind(WtGain_Tila, WtGain_Pang, WtGain_Carp))
+
+scat_WtGain <- plot_ly(type = 'box', data = Prod_DF) %>%
+  add_trace(x = "Pangasius",
+            y = ~WtGain_Pang,
+            name = 'Pangasius',
+            boxmean = 'sd',
+            fillcolor = 'rgb(200,200,200)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = "Tilapia",
+            y = ~WtGain_Tila,
+            name = 'Tilapia',
+            boxmean = 'sd',
+            fillcolor = 'rgb(150,150,150)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = "Carp",
+            y = ~WtGain_Carp,
+            boxmean = 'sd',
+            name = 'Carp',
+            fillcolor = 'rgb(60,60,60)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  layout(showlegend = FALSE,
+         xaxis = list(title = "Species group cultured", showline = TRUE),
+         yaxis = list(title = "Biomass increase per fish (kg)", showline = TRUE, range = c(0,2)))
+orca(scat_WtGain, file = "BiomassIncrease.svg")
+
+##############################################################
+# Plot pang productivity versus tila productivity
+# Need to stratify to ponds with just tila+pang only
+##############################################################
+# Get the productivity values - here the gain in weight over the harvest * fish present / area of pond
+# Final value is tonnes/hectare (assume 1 harvest for pang/2 for tilapia and 1 for carp)
+
+prod_Tila <- (((SurveyData$Tilapia.Weight.at.Harvest..g. - SurveyData$Tilapia.Fingerlings.Weight..g.) * SurveyData$Number.of.Tilapia.Stocked) / (SurveyData$Pond.surface.area * 40.46)) * 0.01 * 2
+prod_Pang <- (((SurveyData$Pangasius.Weight.at.Harvest..g. - SurveyData$Pangasius.Fingerlings.Weight..g.) * SurveyData$Number.of.Pangasius.Stocked) / (SurveyData$Pond.surface.area * 40.46))* 0.01
+prod_Carp <- (((SurveyData$Carp.Weight.at.Harvest..g. - SurveyData$Carp.Fingerlings.Weight..g.) * SurveyData$Number.of.Carp.Fish.Stocked) / (SurveyData$Pond.surface.area * 40.46))* 0.01
+prod_Total <- rowSums(cbind(prod_Tila, prod_Pang, prod_Carp), na.rm = TRUE)
+prod_Total[prod_Total == 0] <- NA
+
+# Get the types of polyculture (TP = Tila&Pang; TC = Tila&Carp; PC = Pang&Carp; TPC = Tila&Pang&Carp)
+PolyCult <- SurveyData$PolyCult
+
+Prod_DF <- data.frame(cbind(PolyCult, prod_Tila, prod_Pang, prod_Carp, prod_Total))
+
+scat_Prod <- plot_ly(type = 'box', data = Prod_DF) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Total,
+            name = 'Total',
+            fillcolor = 'rgb(255,255,255)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Pang,
+            name = 'Pangasius',
+            fillcolor = 'rgb(200,200,200)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Tila,
+            name = 'Tilapia',
+            fillcolor = 'rgb(150,150,150)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Carp,
+            name = 'Carp',
+            fillcolor = 'rgb(60,60,60)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  layout('boxmode' = 'group',
+         xaxis = list(title = "Type of Polyculture Employed",
+                      showline = TRUE),
+         yaxis = list(title = "Biomass increase (g)",
+                      showline = TRUE)
+         )
+
+orca(scat_WtGain, file = "ProductitySpeciesProductionCycle.svg")
+##################################################################
+# Influence of disease and mortality
+##################################################################
+MortLevel <- data.frame(cbind(SurveyData$Pangasius.Stock.Mortality.during.Production,
+                              SurveyData$Tilapia.Stock.Mortality.during.Production,
+                              SurveyData$Carp.Stock.Mortality.during.Production))
+MortLevel[MortLevel == 0] <- 1
+MortLevel[MortLevel == 1] <- 0.95
+MortLevel[MortLevel == 2] <- 0.85
+MortLevel[MortLevel == 3] <- 0.4
+
+AdjProd_DF <- data.frame(cbind(PolyCult, prod_tila = (prod_Tila * MortLevel[, 2]),
+                               prod_Pang = (prod_Pang * MortLevel[, 1]), prod_Carp = (prod_Carp * MortLevel[, 3])))
+AdjTotalProd <- rowSums(cbind((prod_Tila * MortLevel[, 2]), (prod_Pang * MortLevel[, 1]), (prod_Carp * MortLevel[, 3])), na.rm = TRUE)
+AdjTotalProd[AdjTotalProd == 0] <- NA
+AdjProd_DF <- cbind(AdjProd_DF, AdjTotalProd)
+
+scat_Prod <- plot_ly(type = 'box', data = SurveyData) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Total_TPC,
+            name = 'Total Yield',
+            fillcolor = 'rgb(255,255,255)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Pang,
+            name = 'Pangasius Yield',
+            fillcolor = 'rgb(50,50,50)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Tila,
+            name = 'Tilapia Yield',
+            fillcolor = 'rgb(210,210,210)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  add_trace(x = ~PolyCult,
+            y = ~prod_Carp,
+            name = 'Carp Yield',
+            fillcolor = 'rgb(160,160,160)',
+            line = list(color = 'rgb(20,20,20)'),
+            marker = list(color = 'rgb(20,20,20)')) %>%
+  layout('boxmode' = 'group', bargap = 0.1,
+         legend = list(x = 0.85, y = 0.97, borderwidth = 1),
+         xaxis = list(title = "Species group farmed",
+                      tickmode = 'array', tickvals = c("TPC", "PC", "TP", "TC"),
+                      ticktext = c("Pangasius & Tilapia & Carp", 
+                                   "Pangasius & Carp",
+                                   "Pangasius & Tilapia",
+                                   "Tilapia & Carp"),
+                      categoryorder = "array",
+                      categoryarray = c("TPC", "PC", "TP", "TC"),
+                      showline = TRUE, showdividers = TRUE),
+         yaxis = list(title = "Yield (tonnes ha<sup>-1</sup>)",
+                      showline = TRUE,
+                      range = c(0, 165))
+         )
+
+orca(scat_Prod, file = "YieldByPolycultureType.svg", scale = 2, width =600, height = 800)
+```
+
+Here is a plot of the stocking densities:
+
+`r Stock_Box`  
+
+Here is a plot of the weight gain for each species:
+
+`r scat_WtGain`
+
+Here is a plot of the productivity of the species based on 2 cycles of tilapia versus 1 production cycle of pangasius and carp.
+
+`r scat_Prod`
+
+Here is a plot of the productity corrected for mortality in the pond.
+
+`r scat_Prod`
